@@ -27,19 +27,22 @@ class AuditorAgent(Agent):
 
     def handle_risk_profile(self, risk_profile: RiskProfile) -> RemediationOrder:
         """Convert RiskProfile into a RemediationOrder / verdict."""
-        if risk_profile.risk_level.value in {"critical"}:
+        action = risk_profile.recommended_action
+
+        if action == "block":
             verdict = AuditVerdict.BLOCK
-        elif risk_profile.risk_level.value in {"high", "medium"}:
+        elif action in {"remediate", "review"}:
+            # Auto-remediation is high-risk; require human approval before merge.
             verdict = AuditVerdict.REQUIRE_HUMAN_REVIEW
         else:
             verdict = AuditVerdict.ALLOW
 
         strategy = "comment-only"
-        if risk_profile.recommended_action == "block":
+        if action == "block":
             strategy = "comment-only"
-        elif risk_profile.recommended_action == "remediate":
+        elif action == "remediate":
             strategy = "bump-version"
-        elif risk_profile.recommended_action == "review":
+        elif action == "review":
             strategy = "comment-only"
 
         return RemediationOrder(
