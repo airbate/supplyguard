@@ -1,4 +1,4 @@
-# SupplyGuard（暂名）
+# SupplyGuard
 
 > 面向 AI 编程时代的多 Agent 供应链安全防御系统。既在 PR 时刻拦下危险依赖（含 AI 幻觉包），也在零日事件披露时刻自动完成全库影响面评估与缓解修复。
 
@@ -30,32 +30,110 @@ SupplyGuard 试图用多 Agent 系统解决这道题：把守门（proactive）�
 
 ## 项目状态
 
-**早期设计阶段（v0.1）**。当前已完成：
+**v0.2：设计与骨架代码阶段**。
 
-- [x] 参赛方向确认（Infra 赛道 / 依赖治理与安全修复 / 供应链安全与合规子场景）
-- [x] 解决方案骨架（两入口一引擎）
-- [ ] 多 Agent 角色分工（≥3 个 Agent 的职能、边界、协作协议）
-- [ ] 核心 Skill 清单（输入/输出/失败处理/复用价值）
-- [ ] AgentTeams 框架映射
-- [ ] MCP / RAG / 可观测选型
+- [x] 参赛方向与场景确认
+- [x] 解决方案架构（双入口一引擎 + 洋葱式安全防御）
+- [x] 多 Agent 角色分工（Sentinel / Analyst / Remediator / Auditor）
+- [x] 核心 Skill 清单（13 个 Skill，含输入输出与失败降级）
+- [x] AgentTeams / HiClaw 框架映射（基于公开信息，待 hello-world 验证）
+- [x] 技术选型（MCP / RAG / 可观测 / 数据层）
+- [x] 可运行骨架代码（Python 3.10+）
+- [ ] AgentTeams/HiClaw 真实框架接入
 - [ ] 初赛提交材料（500 字作品简介 + 方案 PPT）
-- [ ] 复赛可运行 Demo
+- [ ] 复赛完整 Demo（第二段：零日 CVE 响应）
 
 ## 目录结构
 
 ```
 GoAISpace/
 ├── README.md                              # 本文件
-└── docs/
-    └── specs/
-        └── 2026-08-10-supplyguard-design.md   # 设计文档 v0.1
+├── pyproject.toml                         # Python 项目配置
+├── requirements.txt                       # 依赖
+├── docs/
+│   └── specs/
+│       └── 2026-08-10-supplyguard-design.md   # 设计文档 v0.2
+├── agents/                                # Agent Identity 与 K8s pod 模板
+│   ├── sentinel/
+│   ├── analyst/
+│   ├── remediator/
+│   └── auditor/
+├── src/supplyguard/                       # 核心实现
+│   ├── agents/                            # 4 个 Agent
+│   ├── skills/                            # Skill 实现
+│   ├── mcp/                               # MCP 等效工具层
+│   ├── models/                            # 消息与状态 Schema
+│   ├── runtime/                           # 本地编排器（可替换 HiClaw）
+│   └── demo/                              # Demo 场景
+└── tests/                                 # 单元测试
 ```
 
-后续会加入：`agents/`（角色定义）、`skills/`（能力清单）、`src/`（工程实现）、`demo/`（Demo 场景）。
+## 本地运行
+
+### 环境要求
+
+- Python 3.10+
+- （可选）npm registry 网络访问；Demo 在离线时会回退到本地相似度匹配
+
+### 安装
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 运行 Demo：Slopsquatting / 幻觉包拦截
+
+```bash
+python src/supplyguard/demo/slopsquatting_guard.py
+```
+
+该 Demo 模拟一次 PR 事件：AI 生成的代码引入了名为 `lodos` 的包（`lodash` 的 typosquat / 幻觉）。
+SupplyGuard 会按以下链路执行：
+
+1. **Sentinel** 接收 PR 事件，给外部内容打 `UNTRUSTED` 标签
+2. **Analyst** 调用 `hallucination-check` Skill 查询 npm registry 并做相似度匹配
+3. **Analyst** 调用 `risk-profile` Skill 融合信号
+4. **Auditor** 根据 RiskProfile 裁决 `block`
+5. **Remediator** 生成阻止性 comment
+6. **Auditor** 写入审计摘要
+
+预期输出见 [docs/demo/slopsquatting_guard_output.md](docs/demo/slopsquatting_guard_output.md)。
+
+### 运行测试
+
+```bash
+pytest tests/
+```
+
+## 架构要点
+
+### 洋葱式安全架构
+
+SupplyGuard 的工作对象本身可能是恶意的。Agent 读取包 README、CVE 描述、commit message 来做决策，恶意包可以嵌入 prompt injection 操纵 Agent。我们设计 7 层防御：
+
+1. 感知层：统一标记 UNTRUSTED
+2. 净化层：沙箱解析 + 注入检测
+3. 上下文隔离层：`\<untrusted_source\>` 边界
+4. 能力最小化：每个 Agent 只有最小工具集
+5. 决策仲裁：Auditor 只看结构化证据
+6. 执行沙箱：`--ignore-scripts`、临时容器
+7. 审计不可否认：append-only log + 签名
+
+这是 Agent 化供应链安全产品相对传统 SCA 工具的结构性差异。
+
+### 与 AgentTeams / HiClaw 的关系
+
+- 业务层（Agent 逻辑、Skill、MCP 适配）与编排层解耦
+- 当前使用 `LocalOrchestrator` 在进程内模拟多 Agent 编排
+- 验证 HiClaw hello-world 后，通过 adapter 替换为真实 AgentTeams runtime
+- Agent Identity 文件已按 HiClaw 的 `identity.yaml + pod-template.yaml` 形式准备
 
 ## 快速链接
 
-- 设计文档 v0.1：[docs/specs/2026-08-10-supplyguard-design.md](docs/specs/2026-08-10-supplyguard-design.md)
+- 设计文档：[docs/specs/2026-08-10-supplyguard-design.md](docs/specs/2026-08-10-supplyguard-design.md)
+- Demo 预期输出：[docs/demo/slopsquatting_guard_output.md](docs/demo/slopsquatting_guard_output.md)
 - AgentTeams 官网：<https://hiclaw.io/>
 
 ## License
