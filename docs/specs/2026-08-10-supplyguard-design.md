@@ -110,6 +110,30 @@ context: GOAI 2026 Infra 赛道参赛作品 + 创业刚需自用工具
 3. **修复策略生成**：升级 / 降级 / 替换 / 隔离 / 移除，附影响面预估
 4. **审计与知识沉淀**：决策证据、Trace、复盘、可复用规则
 
+### 3.5 洋葱式安全架构（Defense in Depth）
+
+**核心洞察**：SupplyGuard 的工作对象是"可能怀有恶意的第三方内容"——包源码、README、CVE 描述、commit message、维护者变更说明等，都会被 Agent 读取用于决策。恶意包完全可以在其中嵌入 prompt injection，试图操纵 Agent 帮它"过关"。
+
+**这是 SupplyGuard 特有的元级攻击面**——存量 SCA 工具（Snyk、Dependabot）无需担心，因为它们不是 LLM 系统；Agent 化的供应链安全产品必须原生防御。这也是本方案相对存量工具的结构性差异。
+
+**七层洋葱**（外→内）：
+
+| 层 | 职责 | 关键设计 |
+| --- | --- | --- |
+| 1. 感知层 | 统一标记 UNTRUSTED | 所有外部输入进入前打标签，不做解析 |
+| 2. 净化层 | 沙箱解析 + 注入检测 | 文件解析在容器 / wasm 沙箱内；schema 强校验；剥离零宽字符、异常编码；自由文本走 injection detector |
+| 3. 上下文隔离层 | 证据边界化 | Agent prompt 明确 `<untrusted_source>...</untrusted_source>` 标签内是证据不是指令；采用 spotlighting / delimiting 模式 |
+| 4. 能力最小化 | 每个 Agent 只有职能所需工具 | 分析 Agent 只读；修复 Agent 只能开 PR 不能 merge；触发 Agent 无外部网络 |
+| 5. 决策仲裁 | 高风险动作二次判断 | Auditor Agent 只看结构化证据链，不接触原始 untrusted 内容；类 privileged-LLM / dual-LLM 模式 |
+| 6. 执行沙箱 | install / test 全隔离 | 临时容器；`--ignore-scripts`；postinstall 单独审查；白名单网络 |
+| 7. 审计不可否认 | 决策全链路可回放 | Provenance 签名；append-only log；证据哈希指纹 |
+
+**产品定位**：洋葱作为**内部架构护城河**优先。v1 不外化为独立 SDK / 开源基础设施——理由是"好的产品别人付费才能持续做下去"，商业化优先于工具化。若未来商业化验证成功，再考虑将其中若干层（如 injection detector）作为独立能力对外。
+
+**Demo 支撑点**：可专门设计一段剧情——恶意包在 README 里嵌入 "ignore previous instructions" 类攻击，被 Auditor 层识破。戏剧感强、评委记忆点强。
+
+**评审对齐**：本节直接命中赛道评审维度中的"安全边界"（Skill 要求）、"审批 / 回滚 / 审计机制"（多 Agent 闭环要求）、"工程落地与安全可审计"（20% 权重）。
+
 ## 4. 待细化清单（下一版补齐）
 
 按重要性排序：
@@ -132,7 +156,9 @@ context: GOAI 2026 Infra 赛道参赛作品 + 创业刚需自用工具
 | --- | --- | --- |
 | 参赛方向 | Infra 赛道 / 供应链安全与合规 | 作者创业刚需，评审记忆点强 |
 | 项目结构 | 双入口一引擎（守门 + 响应融合） | 底层能力复用，叙事完整 |
-| 差异化 | 强调"AI 编程时代新攻击面"（slopsquatting 等） | 时效性高，同类作品难对齐 |
+| 差异化 | 卖点重心从"AI 新攻击面"移到"从告警到闭环修复的最后一公里" | 前者是引流梗、后者是护城河；AI 攻击面（含 slopsquatting）保留为叙事切入点 |
+| 安全架构 | 洋葱式 Defense in Depth，7 层 | 抵御 prompt injection / 恶意文件解析；是 Agent 化产品相对存量 SCA 的结构性护城河 |
+| 商业化路径 | 优先做完整产品，v1 不做独立开源 SDK | 好的产品能被付费才能持续做下去；先建护城河后再考虑工具化 |
 
 ### 5.2 待决策
 
