@@ -134,13 +134,113 @@ context: GOAI 2026 Infra 赛道参赛作品 + 创业刚需自用工具
 
 **评审对齐**：本节直接命中赛道评审维度中的"安全边界"（Skill 要求）、"审批 / 回滚 / 审计机制"（多 Agent 闭环要求）、"工程落地与安全可审计"（20% 权重）。
 
-## 4. 待细化清单（下一版补齐）
+## 4. Agent 分工与协作
+
+### 4.1 设计原则
+
+- **职责最小可分**：满足赛道"≥3 个不同职能"要求，同时避免过度拆分导致协同复杂度爆炸。v1 定 **4 个 Agent**。
+- **能力最小化**：每个 Agent 只被授予完成职能所需的最小工具集（对应洋葱第 4 层）。
+- **决策与执行分离**：Analyst 只读；Remediator 只能开 PR 不能 merge；Auditor 做仲裁不做行动。
+- **入口无感**：4 个 Agent 同时服务守门模式与响应模式，Sentinel 的入口路由屏蔽差异。
+
+### 4.2 四个 Agent
+
+#### Sentinel（哨兵 / Coordinator）
+
+- **身份**：外部世界与内部系统的唯一接口层，承担多 Agent 协同框架下的编排角色。
+- **输入**：GitHub / GitLab PR webhook；OSV / GHSA / NVD 增量事件订阅；手动触发。
+- **输出**：任务包（含入口类型、上下文、优先级、目标 Agent）投递到消息队列 / 共享状态。
+- **工具能力**：MCP-GitHub（读 PR）、MCP-OSV（读 feed）、消息队列生产者、Session 状态写入。
+- **边界**：不做安全判断；不接触修复动作；无写代码权限。
+- **协作协议**：向 Analyst 发送 `AnalysisRequest`（含入口类型 + untrusted payload 标签化后的上下文包）。
+- **洋葱层职责**：**第 1 层（感知层）**——对所有输入统一打 UNTRUSTED 标签、剥离危险编码、封装边界标签。
+
+#### Analyst（分析师）
+
+- **身份**：多信号融合的风险画像生成者。
+- **输入**：Sentinel 派发的 `AnalysisRequest`。
+- **输出**：结构化 `RiskProfile`（多维度评分 + 证据链 + 建议动作）。
+- **工具能力**：
+  - Skill：`sbom-build`、`cve-match`、`hallucination-check`、`maintainer-profile`、`reachability-scan`、`license-check`
+  - MCP：npm registry、PyPI、Maven Central、Socket / OSV
+- **边界**：只读；不能开 PR；不能修改文件系统。
+- **协作协议**：向 Auditor 送 `RiskProfile` 请求仲裁；明确低风险可绕过 Auditor 直通 Sentinel 结案。
+- **洋葱层职责**：**第 2、3 层（净化层 + 上下文隔离层）**——untrusted 内容在 sandbox 中解析；LLM 调用用 `<untrusted_source>` 标签包裹。
+
+#### Remediator（修复师）
+
+- **身份**：修复策略生成与 PR 落地者。
+- **输入**：Auditor 批准后的 `RemediationOrder`。
+- **输出**：目标仓库的 PR（含变更、测试结果、回归判断、修复报告）。
+- **工具能力**：
+  - Skill：`bump-version`、`swap-dependency`、`quarantine-package`、`generate-patch`、`sandbox-test-run`
+  - MCP：GitHub / GitLab 写权限（仅限开 PR）、CI 触发接口
+- **边界**：只能开 PR，不能 merge；不能直推 main；install / test 全部在洋葱第 6 层沙箱内进行。
+- **协作协议**：完成后向 Auditor 报告 `RemediationResult`（含验证证据）；被拒后向 Sentinel 报升级。
+- **洋葱层职责**：**第 6 层（执行沙箱）**——所有 install / test 在临时容器内，`--ignore-scripts`，postinstall 独立审查。
+
+#### Auditor（审计员 / Arbiter）
+
+- **身份**：决策仲裁 + 审计留痕的独立监督者。
+- **输入**：`RiskProfile`（分析结果）、`RemediationResult`（修复结果）。
+- **输出**：`Verdict`（Allow / Block / RequireHumanReview）+ 不可否认的审计日志。
+- **工具能力**：
+  - Skill：`evidence-verify`、`policy-check`、`human-approval-request`、`audit-log-write`
+  - MCP：审批系统（钉钉 / 飞书 / GitHub review）、签名服务
+- **边界**：**只看结构化证据链，不接触任何 untrusted 原始文本**（洋葱第 5 层核心）；无写代码权限；无外部网络（防被反渗透）。
+- **协作协议**：接收 Analyst / Remediator 报文；最终裁决签名后写入 append-only log；高风险动作触发人工审批。
+- **洋葱层职责**：**第 5、7 层（决策仲裁 + 审计不可否认）**——privileged-LLM 模式；决策带 provenance 签名。
+
+### 4.3 双入口下的协作流程
+
+**守门模式（PR 触发）**
+
+```
+GitHub PR webhook
+    → Sentinel（打 UNTRUSTED 标签 + 上下文封装）
+    → Analyst（沙箱解析 + 多信号融合 + RiskProfile）
+    → Auditor（仲裁：Allow / Block / RequireReview）
+    → 若 Block/Review：Remediator（生成建议 PR 或说明性 comment）
+    → Auditor（记录审计 + 通知 Sentinel）
+    → Sentinel（关闭本轮任务 / 触发人工审批）
+```
+
+**响应模式（CVE / 恶意包披露触发）**
+
+```
+OSV / GHSA feed
+    → Sentinel（识别事件严重度 + 圈定受影响仓库）
+    → Analyst（全库扫描 + 影响面评估 + RiskProfile 数组）
+    → Auditor（仲裁批量策略 + 分级）
+    → Remediator（批量生成 PR + 沙箱验证）
+    → Auditor（审计留痕 + 生成合规报告）
+    → Sentinel（推送处置报告 + 关闭事件）
+```
+
+### 4.4 上下文传递协议（对齐赛题）
+
+赛题要求说明"上下文传递、协同执行与状态追踪"如何映射到 AgentTeams 能力。本方案采用：
+
+- **共享状态**：Session 级共享上下文（当前事件、仓库指纹、依赖图快照），存放在 PolarDB PG / Redis
+- **消息报文**：`AnalysisRequest` / `RiskProfile` / `RemediationOrder` / `RemediationResult` / `Verdict`，全部 Schema 化
+- **状态机**：任务生命周期 `received → analyzing → arbitrating → remediating → verifying → sealed`
+- **可观测轨迹**：每次 Agent 切换记录 span，覆盖 Skill / MCP / LLM 三类调用（对齐 OpenTelemetry GenAI 语义）
+
+### 4.5 Agent Identity 清单速查
+
+| Agent | 职能 | 关键工具 | 边界 | 洋葱层 |
+| --- | --- | --- | --- | --- |
+| Sentinel | 触发 / 协调 | MCP-Git、MCP-Feed、MQ | 不做安全判断 | L1 |
+| Analyst | 分析 / 画像 | 6 类 Skill + 多个 MCP | 只读 | L2、L3 |
+| Remediator | 修复 / PR | 5 类 Skill + Git 写 | 不 merge、只沙箱运行 | L6 |
+| Auditor | 仲裁 / 审计 | 4 类 Skill + 审批 MCP | 不接触 untrusted 原文 | L5、L7 |
+
+## 5. 待细化清单（下一版补齐）
 
 按重要性排序：
 
-- [ ] **Agent 角色分工**：初拟 4 个 Agent —— Sentinel（触发/协调）、Analyst（分析）、Remediator（修复）、Auditor（审计）。需验证是否与赛题"≥3 个不同职能 Agent"的定义对齐，是否需要合并或拆分
 - [ ] **AgentTeams 框架映射**：角色编排、任务拆解、上下文传递、协同执行、状态追踪如何落到 AgentTeams 的具体能力
-- [ ] **Skill 清单**：每个 Skill 的名称、用途、输入/输出 Schema、调用条件、依赖工具、失败处理、安全边界、复用价值
+- [ ] **Skill 清单**：每个 Skill 的名称、用途、输入 / 输出 Schema、调用条件、依赖工具、失败处理、安全边界、复用价值
 - [ ] **MCP 工具集**：GitHub / GitLab / npm registry / OSV / GHSA / SBOM 工具的 MCP 接入契约
 - [ ] **RAG / 上下文能力**：需在"记忆存储 / 知识库 RAG / 共享状态 / 轨迹可观测"四项中至少选 2 项
 - [ ] **可观测方案**：LoongSuite / AgentScope Studio / AgentLoop 三选一，Trace / Log / Metrics 覆盖策略
@@ -148,9 +248,9 @@ context: GOAI 2026 Infra 赛道参赛作品 + 创业刚需自用工具
 - [ ] **Demo 场景脚本**：至少准备 2 段——slopsquatting 拦截 + 零日事件响应
 - [ ] **初赛提交材料**：500 字作品简介 + PPT
 
-## 5. 关键决策与风险
+## 6. 关键决策与风险
 
-### 5.1 已做的决策
+### 6.1 已做的决策
 
 | 决策 | 结论 | 理由 |
 | --- | --- | --- |
@@ -160,24 +260,23 @@ context: GOAI 2026 Infra 赛道参赛作品 + 创业刚需自用工具
 | 安全架构 | 洋葱式 Defense in Depth，7 层 | 抵御 prompt injection / 恶意文件解析；是 Agent 化产品相对存量 SCA 的结构性护城河 |
 | 商业化路径 | 优先做完整产品，v1 不做独立开源 SDK | 好的产品能被付费才能持续做下去；先建护城河后再考虑工具化 |
 
-### 5.2 待决策
+### 6.2 待决策
 
 | 决策 | 备选 | 依据 |
 | --- | --- | --- |
-| Agent 数量 | 3 vs 4 | 看"职能清晰度"与"协同复杂度"权衡 |
 | v1 生态覆盖 | npm 独占 vs npm+PyPI | 6 天到初赛，只做设计不要求代码；但复赛要能跑，建议 v1 只做 npm |
 | 是否用 MCP | 用 vs 提供等价契约 | 官方推荐 MCP，加分项 |
 | 数据层 | PolarDB PG vs SQLite | 前者推荐加分、后者启动快 |
 
-### 5.3 风险
+### 6.3 风险
 
 - **供应链安全域知识深**：需要快速对齐 xz-utils/event-stream/slopsquatting 等参考事件的技术细节，避免方案空对空
 - **Demo 戏剧感**：静态扫描类工具本质"无声"，需要精心设计 Demo 剧本
 - **AgentTeams 学习成本未评估**：必选框架，需要尽快跑通 hello-world
 
-## 6. 下一步
+## 7. 下一步
 
-1. 用户 review 本 v0.1 文档
-2. 补齐 v0.2：Agent 分工 + Skill 清单
-3. 完成 AgentTeams 框架映射（hello-world 跑通后）
-4. 输出初赛 500 字作品简介 + PPT 大纲（8.16 前）
+1. 跑通 AgentTeams hello-world，评估学习成本，产出框架映射文档
+2. 输出 Skill 清单（每个 Skill 的输入 / 输出 Schema、调用条件、失败处理、安全边界）
+3. 输出初赛 500 字作品简介 + PPT 大纲（8.16 前）
+4. 补 v0.3：Demo 剧本（slopsquatting 拦截 + 零日事件响应）
