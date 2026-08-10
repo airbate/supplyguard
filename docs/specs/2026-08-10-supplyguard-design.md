@@ -612,9 +612,189 @@ cd HiClaw
 | `human-approval-request` | 通知失败 | 降级邮件 + 任务挂起 |
 | `audit-log-write` | 写入失败 | 重试 → 任务不关闭，告警管理员 |
 
-## 7. 关键决策与风险
+## 7. 技术选型
 
-### 7.1 已做的决策
+### 7.1 MCP 工具集接入契约
+
+赛题推荐 MCP 作为外部工具接入协议。SupplyGuard 的 MCP 工具按 Agent 边界分组：
+
+#### 7.1.1 GitHub MCP（Sentinel + Remediator）
+
+- **用途**：读取 PR / diff / issue；创建修复 PR；写 review comment
+- **权限范围**：
+  - Sentinel：只读（`repo:read`、`pull_requests:read`）
+  - Remediator：写 PR（`pull_requests:write`），**不能 merge**
+- **关键 Schema**：
+  - 输入：`repo`、`pr_number`、`comment_body`、`patch_branch`
+  - 输出：`pr_url`、`comment_id`、`status`
+- **失败处理**：API 限流 → 指数退避重试；token 失效 → 任务挂起并告警
+- **审计**：所有写操作记录 actor、timestamp、调用参数哈希
+
+#### 7.1.2 npm Registry MCP（Analyst）
+
+- **用途**：查询包元数据、版本列表、维护者、发布历史、README、tarball checksum
+- **权限范围**：只读
+- **关键 Schema**：
+  - 输入：`package_name`、`version`、`fields`
+  - 输出：`metadata`、`versions`、`maintainers`、`dist_tags`、`tarball_url`、`integrity`
+- **失败处理**：registry 不可达 → 本地缓存 → 高风险保守判断
+- **安全边界**：不下载执行 tarball；README 内容进入沙箱解析
+
+#### 7.1.3 OSV / GHSA MCP（Analyst）
+
+- **用途**：CVE / 漏洞 / 恶意包情报查询
+- **权限范围**：只读
+- **关键 Schema**：
+  - 输入：`package_name`、`version`、`ecosystem`
+  - 输出：`vulns` 数组（含 aliases、severity、fixed versions）
+- **失败处理**：主源失败 → 本地漏洞缓存；无缓存 → "未知风险，按最高级处理"
+- **复用价值**：所有安全扫描共享
+
+#### 7.1.4 CI Trigger MCP（Remediator）
+
+- **用途**：在修复 PR 创建后触发 CI / test runner
+- **权限范围**：只触发，不读 secrets
+- **关键 Schema**：
+  - 输入：`repo`、`branch`、`workflow_id`
+  - 输出：`run_id`、`run_url`、`status`
+- **失败处理**：CI 未响应 → 轮询；超时 → 转人工
+
+#### 7.1.5 Approval Gateway MCP（Auditor）
+
+- **用途**：向人工审批通道（飞书 / 钉钉 / Slack / GitHub review）发送请求并等待响应
+- **权限范围**：发送通知、读取审批回调
+- **关键 Schema**：
+  - 输入：`approval_type`、`evidence_summary`、`timeout_seconds`、`channels`
+  - 输出：`approval_status`、`approver_id`、`decision_timestamp`
+- **失败处理**：主渠道失败 → 降级邮件；全部失败 → 任务挂起
+- **安全边界**：审批消息只发结构化摘要，不含 untrusted 原文
+
+#### 7.1.6 等价集成契约说明
+
+即使 v1 未全部实现 MCP Server，每个 MCP 工具都会附带等价 REST/gRPC 契约：
+- 工具名称、调用入口、参数 Schema、返回结构
+- 鉴权方式、权限范围、失败重试、幂等控制
+- 审计日志字段、降级方式
+- 迁移到 MCP 时只需协议适配，无需重写调用链
+
+### 7.2 RAG 与上下文增强
+
+赛题要求从"Agent 记忆存储 / 知识库 RAG / 共享状态管理 / 轨迹可观测"四项中至少实现 2 项。本方案选择：
+
+1. **共享状态管理**（必选）
+2. **知识库 RAG**（必选）
+
+#### 7.2.1 共享状态管理
+
+- **载体**：PostgreSQL（v1 用 SQLite 本地开发，生产切 PolarDB PG）+ Redis（可选，用于会话锁）
+- **状态内容**：
+  - Session 级：事件源、当前状态机、依赖图快照、RiskProfile、Verdict
+  - 跨会话：仓库指纹、历史 SBOM、AuditLog
+- **Schema 设计**：
+  - `sessions`：session_id、entry_mode、repo、status、created_at、closed_at
+  - `risk_profiles`：profile_id、session_id、signals_json、evidence_chain、verdict
+  - `sboms`：sbom_id、repo、commit_sha、dependency_graph、generated_at
+  - `audit_logs`：log_id、session_id、verdict、evidence_hash、signature
+- **Agent 使用方式**：HiClaw Worker 通过共享 DB 读写状态，Matrix room 中只传递引用 ID，避免长上下文污染
+
+#### 7.2.2 知识库 RAG
+
+- **用途**：沉淀历史事件、处置规则、license 策略、误判案例、API 迁移知识
+- **数据源**：
+  - 历史 AuditLog（自动写入）
+  - 人工标注的"误判 / 正确拦截"案例
+  - 企业内部 Runbook（可选）
+- **检索触发时机**：
+  - Analyst 生成 RiskProfile 前：检索相似历史事件，减少误判
+  - Auditor 仲裁时：检索策略规则与先例
+  - Remediator 选择修复策略时：检索历史成功修复方案
+- **技术栈**：
+  - 向量数据库：pgvector（PolarDB PG 支持）
+  - Embeddings：轻量本地模型或阿里云 DashScope
+  - 分块策略：按"包名+事件类型"聚类，保留元数据过滤
+- **安全边界**：RAG 检索结果作为结构化证据输入，不直接当作指令执行
+
+#### 7.2.3 记忆存储（v2 扩展）
+
+- v1 不实现 Agent 长期记忆；用 AuditLog + RAG 替代
+- v2 可为 Auditor Agent 增加"记忆"，记住组织对特定包的审批偏好
+
+### 7.3 可观测方案
+
+赛题推荐可观测，要求至少覆盖 Trace / Log / Metrics 中的 1-2 类。本方案选择：
+
+1. **Trace**（核心）
+2. **Log**（核心）
+
+Metrics 作为可选（v1 用 Prometheus exporter，v2 完善）。
+
+#### 7.3.1 Trace
+
+- **标准**：OpenTelemetry GenAI Semantic Conventions
+- **覆盖范围**：
+  - Agent 间消息传递（HiClaw / Matrix span）
+  - Skill 调用（输入输出摘要、耗时）
+  - MCP 工具调用（endpoint、status、latency）
+  - LLM 调用（model、prompt_tokens、completion_tokens、finish_reason）
+- **后端**：
+  - 本地开发：Jaeger / stdout
+  - 生产：阿里云 AgentLoop（推荐）或 LoongSuite
+- **价值**：定位 Agent 协作失败、评估 LLM 成本与延迟、复盘决策路径
+
+#### 7.3.2 Log
+
+- **标准**：结构化 JSON，字段统一
+- **关键字段**：`timestamp`、`session_id`、`agent_id`、`skill_name`、`mcp_tool`、`level`、`event`、`evidence_hash`
+- **存储**：Loki / PolarDB / 本地文件
+- **审计对齐**：AuditLog 是 Log 的子集，append-only、签名
+
+#### 7.3.3 Metrics
+
+- v1 基础指标：
+  - `supplyguard_events_total`（按 entry_mode 分）
+  - `supplyguard_blocked_total`
+  - `supplyguard_remediation_pr_total`
+  - `skill_latency_seconds`
+  - `mcp_latency_seconds`
+- 后端：Prometheus + Grafana（v1 本地）；阿里云可观测（生产）
+
+### 7.4 数据层选型
+
+| 数据类型 | v1 选型 | 生产/复赛推荐 | 理由 |
+| --- | --- | --- | --- |
+| SBOM / 依赖图 | SQLite + JSONB | PolarDB for PostgreSQL | v1 启动快；PolarDB 是赛道推荐项 |
+| 向量/RAG | SQLite + pgvector 扩展 | PolarDB + pgvector | 同一数据库减少复杂度 |
+| 审计日志 | SQLite append-only | PolarDB append-only | append-only 是安全核心 |
+| 共享状态 / 锁 | SQLite + 文件锁 | Redis + PolarDB | v1 单实例，SQLite 足够 |
+| Trace | stdout / Jaeger | AgentLoop / LoongSuite | 复赛再接入推荐云产品 |
+| 配置文件 | YAML 本地 | Nacos（推荐） | v1 先用本地 YAML，复赛接入 Nacos 做配置治理 |
+
+**决策**：v1 先用 **SQLite + pgvector** 跑通端到端；复赛前迁移到 **PolarDB for PostgreSQL** 以符合推荐工具链并展示可替换性。
+
+### 7.5 消息队列（可选但推荐）
+
+- **选型**：RocketMQ（赛道推荐）或本地 Python `celery`/Redis Queue
+- **用途**：
+  - 异步事件解耦（GitHub webhook → Sentinel）
+  - 响应模式下批量任务分发
+  - 人工审批等待队列
+- **v1 折中**：若 RocketMQ 部署重，可用 SQLite 队列或 Redis list 替代，但保留 RocketMQ 接入契约
+
+### 7.6 技术栈汇总
+
+| 层级 | 技术 / 产品 | 与 AgentTeams/Skill/MCP/RAG 的关系 |
+| --- | --- | --- |
+| 多 Agent 框架 | AgentTeams（HiClaw） | 必选；Sentinel=Manager，Analyst/Remediator/Auditor=Workers |
+| 云 Skills | 阿里云 Skills（按需） | 如云监控、OSS、安全中心，可作为 Remediator/Auditor 的 MCP 补充 |
+| AI 治理 | Nacos（v2） | 管理 Agent Prompt、Skill 配置、模型路由 |
+| AI 网关 | Higress（v2） | 模型服务统一入口、限流、观测 |
+| 数据层 | SQLite → PolarDB PG + pgvector | SBOM、RAG、AuditLog、共享状态 |
+| 消息队列 | RocketMQ（v1 可选降级） | Agent 间异步事件与审批等待队列 |
+| 可观测 | stdout/Jaeger → AgentLoop/LoongSuite | Trace + Log + Metrics |
+
+## 8. 关键决策与风险
+
+### 8.1 已做的决策
 
 | 决策 | 结论 | 理由 |
 | --- | --- | --- |
@@ -624,34 +804,42 @@ cd HiClaw
 | 安全架构 | 洋葱式 Defense in Depth，7 层 | 抵御 prompt injection / 恶意文件解析；是 Agent 化产品相对存量 SCA 的结构性护城河 |
 | 商业化路径 | 优先做完整产品，v1 不做独立开源 SDK | 好的产品能被付费才能持续做下去；先建护城河后再考虑工具化 |
 | Agent 数量 | 4 个：Sentinel / Analyst / Remediator / Auditor | ≥3 满足赛题；4 个职责清晰、协同复杂度可控 |
+| MCP 协议 | 采用 | 官方推荐，工具边界清晰，便于审计 |
+| RAG 能力 | 共享状态 + 知识库 RAG | 满足赛题"至少 2 项"要求 |
+| 可观测 | Trace + Log（Metrics v2） | 满足赛题"至少 1-2 类"要求 |
+| 数据层 | v1 SQLite + pgvector，复赛 PolarDB PG | 启动快且展示可替换性 |
 
-### 7.2 待决策
+### 8.2 待决策
 
 | 决策 | 备选 | 依据 |
 | --- | --- | --- |
 | v1 生态覆盖 | npm 独占 vs npm+PyPI | 6 天到初赛，只做设计不要求代码；但复赛要能跑，建议 v1 只做 npm |
-| 是否用 MCP | 用 vs 提供等价契约 | 官方推荐 MCP，加分项 |
-| 数据层 | PolarDB PG vs SQLite | 前者推荐加分、后者启动快 |
+| LLM 供应商 | 阿里云百炼 / OpenRouter / 本地 Ollama | 成本、延迟、合规权衡 |
+| Worker 语言 | Python（AgentScope 生态） vs TypeScript | 等 HiClaw hello-world 跑通后确认 |
 
-### 7.3 风险
+### 8.3 风险
 
 - **供应链安全域知识深**：需要快速对齐 xz-utils/event-stream/slopsquatting 等参考事件的技术细节，避免方案空对空
 - **Demo 戏剧感**：静态扫描类工具本质"无声"，需要精心设计 Demo 剧本
 - **AgentTeams 学习成本未评估**：框架映射已基于公开信息写出，仍需本地跑通 hello-world 验证假设
+- **v1 技术栈过多**：复赛前需收敛到可运行子集，避免 PPT 堆砌工具
 
-## 8. 下一步
+## 9. 下一步
 
-1. **（最高优先级）本地跑通 AgentTeams hello-world**，验证 5.5 节的待验证假设，升级框架映射为"已验证映射"
-2. 补充 MCP 工具集接入契约、RAG / 可观测 / 数据层选型
-3. 输出初赛 500 字作品简介 + PPT 大纲（8.16 前）
-4. 补 v0.3：Demo 剧本（slopsquatting 拦截 + 零日事件响应）
+1. **本地跑通 AgentTeams hello-world**，验证框架假设，确认 Worker 语言与注册方式
+2. 搭建 SupplyGuard 项目骨架（agents/、skills/、src/、demo/）
+3. 实现并跑通最小 Demo：slopsquatting 幻觉包拦截
+4. 输出初赛 500 字作品简介 + PPT 大纲（8.16 前）
+5. 补 Demo 剧本第二段：零日 CVE 响应
 
-## 9. 待细化清单
+## 10. 待细化清单
 
 - [ ] **AgentTeams hello-world 验证**：跑通后再确认框架映射细节
-- [ ] **MCP 工具集**：GitHub / GitLab / npm registry / OSV / GHSA / SBOM 工具的 MCP 接入契约
-- [ ] **RAG / 上下文能力**：需在"记忆存储 / 知识库 RAG / 共享状态 / 轨迹可观测"四项中至少选 2 项
-- [ ] **可观测方案**：LoongSuite / AgentScope Studio / AgentLoop 三选一，Trace / Log / Metrics 覆盖策略
-- [ ] **数据层**：PolarDB PG 用于 SBOM / 审计日志 / 向量记忆，还是先用 SQLite + pgvector 起步
-- [ ] **Demo 场景脚本**：至少准备 2 段——slopsquatting 拦截 + 零日事件响应
+- [x] **MCP 工具集**：接入契约与等价集成说明已补充
+- [x] **RAG / 上下文能力**：共享状态 + 知识库 RAG 已选型
+- [x] **可观测方案**：Trace + Log + Metrics(v2) 已选型
+- [x] **数据层**：SQLite + pgvector（v1）→ PolarDB PG（复赛）
+- [ ] **项目骨架搭建**：agents/、skills/、src/、demo/
+- [ ] **最小 Demo 跑通**：slopsquatting 拦截
+- [ ] **Demo 场景脚本第二段**：零日 CVE 响应
 - [ ] **初赛提交材料**：500 字作品简介 + PPT
