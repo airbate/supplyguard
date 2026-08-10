@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -25,7 +26,7 @@ class RiskProfileSkill(Skill[RiskProfileInput, RiskProfile]):
     name = "risk-profile"
     description = "Fuse multiple security signals into a structured risk profile"
 
-    def run(self, input_data: RiskProfileInput) -> RiskProfileOutput:  # noqa: PLR0912
+    def run(self, input_data: RiskProfileInput) -> RiskProfile:
         """Simple rule-based fusion engine.
 
         v1 uses deterministic rules; LLM-based fusion is a v2 enhancement.
@@ -49,7 +50,9 @@ class RiskProfileSkill(Skill[RiskProfileInput, RiskProfile]):
                     source=signal.get("source", "internal"),
                     summary=str(data)[:200],
                     confidence=float(signal.get("confidence", 0.5)),
-                    raw_fingerprint=str(hash(str(data)) & 0xFFFFFFFF),
+                    raw_fingerprint=hashlib.sha256(
+                        repr(sorted(data.items())).encode("utf-8")
+                    ).hexdigest()[:16],
                 )
             )
 
@@ -65,7 +68,7 @@ class RiskProfileSkill(Skill[RiskProfileInput, RiskProfile]):
                 license_violation = True
             elif skill == "maintainer-profile" and data.get("maintainer_change_detected"):
                 maintainer_anomaly = True
-            elif skill == "hallucination-check" and data.get("registry_error"):
+            elif skill == "hallucination-check" and data.get("evidence", {}).get("registry_error"):
                 registry_unreachable = True
 
         human_review_reasons: list[str] = []

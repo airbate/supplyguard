@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from pydantic import BaseModel
 
 from .base import Skill
@@ -36,7 +38,7 @@ class CveMatchSkill(Skill[CveMatchInput, CveMatchOutput]):
     description = "Match package version against CVE / vulnerability databases"
 
     # Minimal vulnerability database for demos.
-    VULNERABLE_VERSIONS: dict[str, dict[str, dict[str, list[str] | str]]] = {
+    VULNERABLE_VERSIONS: ClassVar[dict[str, dict[str, dict[str, list[str] | str]]]] = {
         "lodash": {
             "4.17.4": {
                 "severity": "critical",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from supplyguard.models.messages import RemediationOrder, RemediationResult
 
 from .base import Agent
@@ -12,7 +14,7 @@ class RemediatorAgent(Agent):
 
     name = "Remediator"
     role = "remediator"
-    skills = [
+    skills: ClassVar[list[str]] = [
         "bump-version",
         "swap-dependency",
         "quarantine-package",
@@ -20,16 +22,12 @@ class RemediatorAgent(Agent):
         "sandbox-test-run",
     ]
 
-    def handle(self, order: object) -> RemediationResult:  # type: ignore[override]
+    def _remediate(self, order: RemediationOrder) -> RemediationResult:
         """Execute remediation strategy and return result.
 
         v1 demo implementation does not perform real git mutations;
         it produces a structured result describing what would happen.
         """
-        if not isinstance(order, RemediationOrder):
-            msg = "Remediator only accepts RemediationOrder messages"
-            raise TypeError(msg)
-
         artifacts: dict = {
             "verdict": order.verdict.value,
             "strategy": order.strategy,
@@ -65,8 +63,8 @@ class RemediatorAgent(Agent):
             regression_detected=False,
         )
 
-    async def handle_async(self, message: object) -> RemediationResult | None:
-        """Async wrapper for compatibility with the orchestrator."""
+    async def handle(self, message: object) -> RemediationResult | None:
+        """Execute a remediation order using the common Agent interface."""
         if isinstance(message, RemediationOrder):
-            return self.handle(message)
+            return self._remediate(message)
         return None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import ClassVar
 
 from supplyguard.models.messages import (
     AuditVerdict,
@@ -23,7 +24,9 @@ class AuditorAgent(Agent):
 
     name = "Auditor"
     role = "arbiter"
-    skills = ["policy-check", "human-approval-request", "audit-log-write", "evidence-verify"]
+    skills: ClassVar[list[str]] = [
+        "policy-check", "human-approval-request", "audit-log-write", "evidence-verify"
+    ]
 
     def handle_risk_profile(self, risk_profile: RiskProfile) -> RemediationOrder:
         """Convert RiskProfile into a RemediationOrder / verdict."""

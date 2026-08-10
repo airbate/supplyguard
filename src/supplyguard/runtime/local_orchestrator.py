@@ -54,7 +54,7 @@ class LocalOrchestrator:
             return {"error": "Auditor did not produce a RemediationOrder"}
 
         # 4. Remediator acts (if needed)
-        result = self.remediator.handle(order)
+        result = await self.remediator.handle(order)
         if not isinstance(result, RemediationResult):
             return {"error": "Remediator did not produce a RemediationResult"}
 

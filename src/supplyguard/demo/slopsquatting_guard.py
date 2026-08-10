@@ -40,14 +40,14 @@ async def main() -> None:
         ],
     }
 
-    print("=" * 60)  # noqa: T201
-    print("SupplyGuard Demo: Slopsquatting / Hallucination Detection")  # noqa: T201
-    print("=" * 60)  # noqa: T201
+    print("=" * 60)
+    print("SupplyGuard Demo: Slopsquatting / Hallucination Detection")
+    print("=" * 60)
 
     result = await orchestrator.run_guard(event)
 
-    print("\nWorkflow result:")  # noqa: T201
-    print(json.dumps(result, indent=2, default=str))  # noqa: T201
+    print("\nWorkflow result:")
+    print(json.dumps(result, indent=2, default=str))
 
     await orchestrator.close()
 

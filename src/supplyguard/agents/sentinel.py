@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from supplyguard.models.messages import (
     AnalysisRequest,
     DependencyChange,
@@ -16,7 +18,7 @@ class SentinelAgent(Agent):
 
     name = "Sentinel"
     role = "coordinator"
-    skills = ["policy-check"]
+    skills: ClassVar[list[str]] = ["policy-check"]
 
     async def handle(self, message: object) -> AnalysisRequest | None:
         """Transform external event into an AnalysisRequest.
@@ -33,7 +35,13 @@ class SentinelAgent(Agent):
             commit = message.get("commit_sha", "")
             changes_raw = message.get("changes", [])
             source = EventSource(message.get("source", "manual"))
-            changes = [DependencyChange(**c) for c in changes_raw]
+            changes = []
+            for raw_change in changes_raw:
+                change = dict(raw_change)
+                context = change.get("context_text", "")
+                if not context.startswith("<untrusted_source>"):
+                    change["context_text"] = self.tag_untrusted(context)
+                changes.append(DependencyChange(**change))
             return AnalysisRequest(
                 session_id=message.get("session_id", "demo-session"),
                 source=source,

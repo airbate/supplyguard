@@ -16,11 +16,6 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(project_root / "src"))
 
-from supplyguard.models.messages import (
-    AnalysisRequest,
-    DependencyChange,
-    EventSource,
-)
 from supplyguard.runtime.local_orchestrator import LocalOrchestrator
 
 
@@ -46,14 +41,14 @@ async def main() -> None:
         ],
     }
 
-    print("=" * 60)  # noqa: T201
-    print("SupplyGuard Demo: Zero-day CVE Response")  # noqa: T201
-    print("=" * 60)  # noqa: T201
+    print("=" * 60)
+    print("SupplyGuard Demo: Zero-day CVE Response")
+    print("=" * 60)
 
     result = await orchestrator.run_guard(event)
 
-    print("\nWorkflow result:")  # noqa: T201
-    print(json.dumps(result, indent=2, default=str))  # noqa: T201
+    print("\nWorkflow result:")
+    print(json.dumps(result, indent=2, default=str))
 
     await orchestrator.close()
 

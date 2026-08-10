@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -43,7 +44,7 @@ class HallucinationCheckSkill(Skill[HallucinationCheckInput, HallucinationCheckO
     name = "hallucination-check"
     description = "Detect AI-hallucinated or typosquatted package names"
 
-    POPULAR_NPM_PACKAGES = [
+    POPULAR_NPM_PACKAGES: ClassVar[list[str]] = [
         "lodash",
         "axios",
         "react",
@@ -86,12 +87,27 @@ class HallucinationCheckSkill(Skill[HallucinationCheckInput, HallucinationCheckO
         try:
             exists = await self.npm_client.exists(package_name)
         except Exception:  # noqa: BLE001
-            # Network failure: conservatively flag for human review.
+            # Preserve the offline Demo: familiar popular packages are
+            # allowed, clear typosquats are blocked, and other unknown names
+            # are sent to human review by the risk fusion policy.
+            similar = difflib.get_close_matches(
+                package_name, self.POPULAR_NPM_PACKAGES, n=3, cutoff=0.7
+            )
+            is_known_popular = package_name in self.POPULAR_NPM_PACKAGES
             return HallucinationCheckOutput(
-                is_hallucination_risk=True,
-                reasoning="Registry unreachable; treating as high-risk per fail-safe policy.",
-                recommended_alternatives=[],
-                evidence={"registry_error": True},
+                is_hallucination_risk=bool(similar) and not is_known_popular,
+                reasoning=(
+                    "Registry unreachable; local popular-package fallback found "
+                    f"a likely typo of: {', '.join(similar)}."
+                    if similar and not is_known_popular
+                    else "Registry unreachable; fail-safe policy requires human review."
+                ),
+                recommended_alternatives=[] if is_known_popular else similar,
+                evidence={
+                    "registry_error": True,
+                    "local_fallback": True,
+                    "similar_popular_packages": similar,
+                },
             )
 
         similar = difflib.get_close_matches(
@@ -104,7 +120,7 @@ class HallucinationCheckSkill(Skill[HallucinationCheckInput, HallucinationCheckO
         evidence: dict[str, Any] = {
             "registry_exists": exists,
             "similar_popular_packages": similar,
-            "context_text_hash": hash(input_data.context_text) & 0xFFFFFFFF,
+            "context_text_hash": _fingerprint(input_data.context_text),
         }
 
         if exists:
@@ -145,7 +161,7 @@ class HallucinationCheckSkillSync:
 
     name = "hallucination-check-sync"
 
-    POPULAR_NPM_PACKAGES = HallucinationCheckSkill.POPULAR_NPM_PACKAGES
+    POPULAR_NPM_PACKAGES: ClassVar[list[str]] = HallucinationCheckSkill.POPULAR_NPM_PACKAGES
 
     def run(self, candidate_package_name: str, context_text: str = "") -> HallucinationCheckOutput:
         metadata = fetch_package_sync(candidate_package_name)
@@ -160,7 +176,7 @@ class HallucinationCheckSkillSync:
         evidence: dict[str, Any] = {
             "registry_exists": exists,
             "similar_popular_packages": similar,
-            "context_text_hash": hash(context_text) & 0xFFFFFFFF,
+            "context_text_hash": _fingerprint(context_text),
         }
 
         if exists:
@@ -188,3 +204,8 @@ class HallucinationCheckSkillSync:
             recommended_alternatives=alternatives,
             evidence=evidence,
         )
+
+
+def _fingerprint(value: str) -> str:
+    """Return a stable, non-reversible reference for untrusted text."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]

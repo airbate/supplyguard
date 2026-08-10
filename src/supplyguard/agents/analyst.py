@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from supplyguard.models.messages import AnalysisRequest, RiskProfile
 from supplyguard.skills.cve_match import CveMatchInput, CveMatchSkill
 from supplyguard.skills.hallucination_check import (
@@ -18,7 +20,7 @@ class AnalystAgent(Agent):
 
     name = "Analyst"
     role = "profiler"
-    skills = [
+    skills: ClassVar[list[str]] = [
         "sbom-build",
         "cve-match",
         "hallucination-check",

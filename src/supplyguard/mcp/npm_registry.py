@@ -7,7 +7,7 @@ It can later be swapped with a real MCP tool binding without changing skill code
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -44,7 +44,7 @@ class NpmRegistryClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def __aenter__(self) -> NpmRegistryClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, *_) -> None:
@@ -70,5 +70,5 @@ def fetch_package_sync(package_name: str) -> dict[str, Any] | None:
 
 if __name__ == "__main__":
     # Quick smoke test
-    print(asyncio.run(NpmRegistryClient().exists("lodash")))  # noqa: T201
-    print(fetch_package_sync("lodash") is not None)  # noqa: T201
+    print(asyncio.run(NpmRegistryClient().exists("lodash")))
+    print(fetch_package_sync("lodash") is not None)
