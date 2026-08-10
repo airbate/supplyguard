@@ -826,11 +826,10 @@ Metrics 作为可选（v1 用 Prometheus exporter，v2 完善）。
 
 ## 9. 下一步
 
-1. **本地跑通 AgentTeams hello-world**，验证框架假设，确认 Worker 语言与注册方式
-2. 搭建 SupplyGuard 项目骨架（agents/、skills/、src/、demo/）
-3. 实现并跑通最小 Demo：slopsquatting 幻觉包拦截
-4. 输出初赛 500 字作品简介 + PPT 大纲（8.16 前）
-5. 补 Demo 剧本第二段：零日 CVE 响应
+1. 输出初赛 500 字作品简介 + PPT 大纲（8.16 前）
+2. **本地跑通 AgentTeams hello-world**，验证框架假设，确认 Worker 语言与注册方式
+3. 补 Demo 剧本第二段：零日 CVE 响应
+4. 复赛准备：接入 PolarDB PG、LoongSuite/AgentLoop、Nacos（按需）
 
 ## 10. 待细化清单
 
@@ -839,7 +838,46 @@ Metrics 作为可选（v1 用 Prometheus exporter，v2 完善）。
 - [x] **RAG / 上下文能力**：共享状态 + 知识库 RAG 已选型
 - [x] **可观测方案**：Trace + Log + Metrics(v2) 已选型
 - [x] **数据层**：SQLite + pgvector（v1）→ PolarDB PG（复赛）
-- [ ] **项目骨架搭建**：agents/、skills/、src/、demo/
-- [ ] **最小 Demo 跑通**：slopsquatting 拦截
+- [x] **项目骨架搭建**：agents/、skills/、src/、demo/
+- [x] **最小 Demo 跑通**：slopsquatting 拦截
 - [ ] **Demo 场景脚本第二段**：零日 CVE 响应
 - [ ] **初赛提交材料**：500 字作品简介 + PPT
+
+## 11. 评审对齐检查表
+
+### 11.1 通用评审维度（满分 100%）
+
+| 维度 | 权重 | 本方案如何命中 | 当前证据 | 风险 / 缺口 |
+| --- | --- | --- | --- | --- |
+| **场景价值与行业可复制性** | 25% | 供应链安全是 universal 痛点；AI 编程时代新增 slopsquatting 攻击面；从创业刚需出发 | 设计文档 1.3、README 项目定位 | 需补充具体行业数据或客户访谈 |
+| **多 Agent 协同与自主闭环能力** | 25% | 4 个 Agent 职责清晰；双入口完整闭环；上下文传递、状态机、人工审批、审计回滚均已设计 | 设计文档第 4、5 章；Demo 已跑通 | AgentTeams 真实框架接入待验证 |
+| **Skill 工程体系与生态复用** | 25% | 13 个 Skill 卡片，每个含输入输出、调用条件、失败处理、安全边界、复用价值；Skill 被多 Agent / 多场景复用 | 设计文档第 6 章；2 个 Skill 已实现 | 剩余 11 个 Skill 目前为设计，需复赛实现 |
+| **工程落地、运行验证与安全可审计** | 20% | 洋葱式 7 层安全架构；Demo 可运行；审计日志 append-only；可观测 Trace+Log 已选型 | Demo 输出、README 运行说明 | 可观测后端尚未接入；HiClaw 未跑通 |
+| **开放 / 开源贡献** | 5% | Skill 设计天然可复用；方案规划开源协议；Agent Identity 文件结构化 | README License 章节 | v1 不做独立 SDK，按商业化优先 |
+
+### 11.2 赛题个性化评审补充
+
+| 赛题要求 | 本方案如何响应 | 证据位置 |
+| --- | --- | --- |
+| AgentTeams 作为设计基点 | Sentinel=Manager，Analyst/Remediator/Auditor=Workers；Matrix room 编排；身份文件已按 HiClaw 准备 | 5.1、5.2、agents/*/ |
+| Skill 必选项 | 13 个 Skill 清单，含完整 Schema 与失败处理 | 第 6 章 |
+| ≥3 个不同职能 Agent | 4 个 Agent，职责边界清晰 | 4.2 |
+| 多 Agent 闭环 | 检测→分析→决策→修复→验证→审计→沉淀 | 4.3 |
+| MCP / 等价契约 | 6 个 MCP 工具接入契约 + 等价集成说明 | 7.1 |
+| RAG / 上下文能力（至少 2 项） | 共享状态管理 + 知识库 RAG 已选型 | 7.2 |
+| 可观测（至少 1-2 类） | Trace + Log 已选型 | 7.3 |
+
+### 11.3 当前得分自评（初赛阶段）
+
+- **场景价值**：22/25（痛点真实，但缺少行业数据支撑）
+- **多 Agent 协同**：23/25（设计完整，框架接入待验证）
+- **Skill 体系**：23/25（设计完整，实现 2/13）
+- **工程落地**：16/20（Demo 跑通，可观测与审计后端待实现）
+- **开源贡献**：4/5（有开源计划，但 v1 不外化 SDK）
+
+**合计自评：88/100**
+
+**提升到 90+ 的关键动作**：
+1. 跑通 HiClaw hello-world，把框架映射从"基于公开信息"升级为"已验证"
+2. PPT 里放 Demo 截图 / 录屏
+3. 补充 1-2 个真实行业参考事件（xz-utils、event-stream、slopsquatting 论文）
