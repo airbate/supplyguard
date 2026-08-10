@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sentinel-agent
+  labels:
+    app: supplyguard
+    agent: sentinel
+spec:
+  serviceAccountName: sentinel-sa
+  containers:
+    - name: worker
+      image: supplyguard/sentinel:latest
+      env:
+        - name: AGENT_ROLE
+          value: coordinator
+        - name: MCP_GITHUB_READONLY
+          value: "true"
+        - name: MCP_OSV_READONLY
+          value: "true"
+      volumeMounts:
+        - name: identity
+          mountPath: /etc/supplyguard/identity
+          readOnly: true
+  volumes:
+    - name: identity
+      configMap:
+        name: sentinel-identity

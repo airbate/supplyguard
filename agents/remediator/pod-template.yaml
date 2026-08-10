@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: remediator-agent
+  labels:
+    app: supplyguard
+    agent: remediator
+spec:
+  serviceAccountName: remediator-sa
+  containers:
+    - name: worker
+      image: supplyguard/remediator:latest
+      env:
+        - name: AGENT_ROLE
+          value: remediator
+        - name: ALLOW_MERGE
+          value: "false"
+      securityContext:
+        readOnlyRootFilesystem: false
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+      volumeMounts:
+        - name: identity
+          mountPath: /etc/supplyguard/identity
+          readOnly: true
+        - name: sandbox
+          mountPath: /tmp/sandbox
+  volumes:
+    - name: identity
+      configMap:
+        name: remediator-identity
+    - name: sandbox
+      emptyDir: {}
