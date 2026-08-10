@@ -239,7 +239,7 @@ OSV / GHSA feed
 
 按重要性排序：
 
-- [ ] **AgentTeams 框架映射**：角色编排、任务拆解、上下文传递、协同执行、状态追踪如何落到 AgentTeams 的具体能力
+- [x] **AgentTeams 框架映射**：初步映射完成，待 hello-world 验证后细化
 - [ ] **Skill 清单**：每个 Skill 的名称、用途、输入 / 输出 Schema、调用条件、依赖工具、失败处理、安全边界、复用价值
 - [ ] **MCP 工具集**：GitHub / GitLab / npm registry / OSV / GHSA / SBOM 工具的 MCP 接入契约
 - [ ] **RAG / 上下文能力**：需在"记忆存储 / 知识库 RAG / 共享状态 / 轨迹可观测"四项中至少选 2 项
@@ -248,7 +248,105 @@ OSV / GHSA feed
 - [ ] **Demo 场景脚本**：至少准备 2 段——slopsquatting 拦截 + 零日事件响应
 - [ ] **初赛提交材料**：500 字作品简介 + PPT
 
-## 6. 关键决策与风险
+## 6. AgentTeams（HiClaw）框架映射
+
+> **信息来源说明**：hiclaw.io 与 GitHub raw 在本地环境无法访问，本节基于 WebSearch 得到的公开信息（官方仓库 `agentscope-ai/HiClaw`、`alibaba/hiclaw`、架构文档 `docs/architecture.md`、快速入门 `docs/quickstart.md`）编写。其中标 **⚠ 待验证** 的部分需要本地跑通 hello-world 后确认。
+
+### 6.1 HiClaw 核心抽象
+
+HiClaw 自称为"Collaborative Multi-Agent OS"，核心抽象如下：
+
+- **Manager Agent**：外部任务的统一入口与总调度者；将复杂任务拆分为子任务并分发给 Worker
+- **Worker Agent**：执行单一职责任务的智能体，通常一个 Worker 负责一个具体职能
+- **Team / Team Leader（可选）**：当 Worker 较多时，可组成 Team，由 Team Leader 接收 Manager 任务并在组内二次分发
+- **Human**：通过 Matrix 协议进入同一个聊天室，拥有完整可见性与实时干预能力
+- **Communication Layer**：所有协作在 **Matrix rooms** 中进行，天然可审计、可回放
+- **Runtime**：Kubernetes-native，每个 Manager / Worker 独立 Pod，`hiclaw-controller` 负责从 pod template 创建 Agent 运行时
+
+### 6.2 SupplyGuard 角色如何映射到 HiClaw
+
+| SupplyGuard Agent | HiClaw 角色 | 说明 |
+| --- | --- | --- |
+| Sentinel | **Manager Agent** | 外部世界唯一接口，负责事件路由、任务拆分、状态机推进 |
+| Analyst | **Worker Agent** | 专职分析，只读，输出结构化 RiskProfile |
+| Remediator | **Worker Agent** | 专职修复与 PR 落地 |
+| Auditor | **Worker Agent（带仲裁特权）** | 不直接操作工具，只基于结构化证据做最终裁决；可要求 Human 介入 |
+| 用户 / 安全负责人 | **Human in the loop** | 高风险动作通过 Matrix / WebUI 实时审批 |
+
+**为什么不是把 Auditor 也做成 Manager？** 因为 Auditor 的职能是"监督 + 签名"，不是"编排"。让 Sentinel（Manager）负责流程推进、Auditor 负责终局仲裁，符合"决策与执行分离"的安全原则。
+
+### 6.3 任务拆解与协同执行（守门模式示例）
+
+```
+GitHub PR webhook
+  → Matrix room 收到事件消息
+  → Sentinel (Manager):
+       "收到 PR #42，@Analyst 请给出 RiskProfile，
+        @Auditor 请准备仲裁，@Remediator 待命"
+  → Analyst 在 room 中回复结构化 RiskProfile
+  → Auditor 基于 RiskProfile 裁决：Allow / Block / RequireHumanReview
+  → 若 Block：
+       Sentinel 通知 Remediator："请生成修复 PR / comment"
+       Remediator 回复 PR 链接 + 验证结果
+  → Auditor 最终审计留痕，消息全部在 room 中可追溯
+```
+
+**赛题五维度映射**：
+
+| 赛题要求 | HiClaw / 本方案如何落地 |
+| --- | --- |
+| **角色编排** | Manager + 3 Workers；Matrix room 作为编排舞台 |
+| **任务拆解** | Sentinel 将"一次 PR 事件"拆为：分析 → 仲裁 →（修复）→ 审计 |
+| **上下文传递** | Matrix room 消息本身就是不可变上下文；PolarDB / Redis 维护结构化共享状态 |
+| **协同执行** | Agent 在 room 中 @ 彼此，HiClaw runtime 负责消息路由与状态机推进 |
+| **状态追踪** | room 历史 = 审计日志；`hiclaw-controller` 监控每个 Pod 生命周期；OpenTelemetry Trace 覆盖每个 Agent 调用 |
+
+### 6.4 Agent Identity 在 HiClaw 中的表达
+
+赛题要求提交"Agent Identity 清单"。在 HiClaw 中，Identity 可以映射为：
+
+- **System Prompt**：定义 Agent 职能、边界、工具权限
+- **MCP Tool Binding**：每个 Worker 的 pod template 中只挂载本职能所需工具
+- **RBAC / ServiceAccount**：K8s 层面的最小权限
+- **Display Name + Avatar（可选）**：在 Matrix room 中可识别
+
+本方案会为每个 Agent 准备如下 Identity 文件（后续落地）：
+
+```
+agents/
+├── sentinel/
+│   ├── identity.yaml       # name, role, permissions, system_prompt
+│   └── pod-template.yaml   # 挂载工具：GitHub webhook、MQ、状态写入
+├── analyst/
+│   ├── identity.yaml       # read-only, untrusted_source handling rules
+│   └── pod-template.yaml   # 挂载工具：SBOM、CVE、hallucination check
+├── remediator/
+│   ├── identity.yaml       # sandbox-only, cannot merge
+│   └── pod-template.yaml   # 挂载工具：git、CI trigger、patch gen
+└── auditor/
+    ├── identity.yaml       # privileged-arbiter, no untrusted raw text
+    └── pod-template.yaml   # 挂载工具：approval gateway、audit log、signature
+```
+
+### 6.5 待验证假设（⚠ 需要本地跑 hello-world）
+
+1. **语言栈**：HiClaw 大概率基于 Python（AgentScope 生态），但需确认 Worker 是否支持多语言 / 能否用 TypeScript 写。
+2. **本地最小运行环境**：文档提到 Docker + `mc` + `jq`，是否必须 K8s 才能跑最简单的 demo？
+3. **Matrix 协议是否为唯一通信方式**：如果是，是否需要自备 homeserver？
+4. **Worker 注册方式**：是写 Python 类、YAML 配置，还是容器镜像？
+5. **Human-in-the-loop API**：如何触发审批、如何等待 Human 响应、超时策略是什么？
+
+**建议你在本机执行**：
+
+```bash
+git clone https://github.com/agentscope-ai/HiClaw.git
+cd HiClaw
+# 按 docs/quickstart.md 跑 hello-world
+```
+
+跑通后把上述假设确认一遍，本章节将升级为 v0.3 的"已验证映射"。
+
+## 7. 关键决策与风险
 
 ### 6.1 已做的决策
 
@@ -272,11 +370,11 @@ OSV / GHSA feed
 
 - **供应链安全域知识深**：需要快速对齐 xz-utils/event-stream/slopsquatting 等参考事件的技术细节，避免方案空对空
 - **Demo 戏剧感**：静态扫描类工具本质"无声"，需要精心设计 Demo 剧本
-- **AgentTeams 学习成本未评估**：必选框架，需要尽快跑通 hello-world
+- **AgentTeams 学习成本未评估**：框架映射已基于公开信息写出，仍需本地跑通 hello-world 验证假设
 
 ## 7. 下一步
 
-1. 跑通 AgentTeams hello-world，评估学习成本，产出框架映射文档
+1. **（最高优先级）本地跑通 AgentTeams hello-world**，验证 6.5 节的待验证假设，升级框架映射为"已验证映射"
 2. 输出 Skill 清单（每个 Skill 的输入 / 输出 Schema、调用条件、失败处理、安全边界）
 3. 输出初赛 500 字作品简介 + PPT 大纲（8.16 前）
 4. 补 v0.3：Demo 剧本（slopsquatting 拦截 + 零日事件响应）
