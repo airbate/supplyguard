@@ -5,6 +5,9 @@
 **运行命令**：
 
 ```bash
+uv venv
+uv pip install -r requirements.txt
+uv pip install -e .
 python src/supplyguard/demo/slopsquatting_guard.py
 ```
 
@@ -32,18 +35,18 @@ Workflow result:
     "packages": [
       {
         "name": "hallucination-check",
-        "evidence": "{'registry_exists': False, 'similar_popular_packages': ['lodash'], 'context_text_hash': 1234567890}"
+        "evidence": "{'is_hallucination_risk': True, 'reasoning': \"Package 'lodos' was not found in npm registry. It closely resembles popular package(s): lodash. Possible typosquatting or LLM hallucination.\", 'recommended_alternatives': ['lodash']}"
       }
     ],
     "action_taken": "wrote_blocking_comment",
-    "comment_body": "> ⚠️ SupplyGuard blocked this dependency change.\n\nVerdict: block. Reasons: Hallucinated or typosquatted package detected.\n\nEvidence:\n- hallucination-check: {'registry_exists': False, 'similar_popular_packages': ['lodash'], 'context_text_hash': 1234567890}"
+    "comment_body": "> ⚠️ SupplyGuard blocked this dependency change.\n\nVerdict: block. Reasons: Hallucinated or typosquatted package detected.\n\nEvidence:\n- hallucination-check: {'is_hallucination_risk': True, 'reasoning': \"Package 'lodos' was not found in npm registry. It closely resembles popular package(s): lodash. Possible typosquatting or LLM hallucination.\", 'recommended_alternatives': ['lodash']}"
   },
   "audit_seal": {
     "session_id": "demo-slopsquatting-001",
     "status": "sealed",
     "regression_detected": false,
     "logs_hash": "sha256:demo",
-    "sealed_at": "2026-08-11T..."
+    "sealed_at": "2026-08-10T16:30:57.893726+00:00"
   }
 }
 ```

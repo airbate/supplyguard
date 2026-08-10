@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from supplyguard.models.messages import Evidence, RiskLevel
+from supplyguard.models.messages import Evidence, RiskLevel, RiskProfile
 
 from .base import Skill
 
@@ -19,17 +19,7 @@ class RiskProfileInput(BaseModel):
     signals: list[dict[str, Any]] = Field(default_factory=list)
 
 
-class RiskProfileOutput(BaseModel):
-    """Output for risk-profile fusion."""
-
-    session_id: str
-    risk_level: RiskLevel
-    recommended_action: str
-    evidence_chain: list[Evidence]
-    human_review_reasons: list[str] = Field(default_factory=list)
-
-
-class RiskProfileSkill(Skill[RiskProfileInput, RiskProfileOutput]):
+class RiskProfileSkill(Skill[RiskProfileInput, RiskProfile]):
     """Fuse multiple security signals into a structured RiskProfile."""
 
     name = "risk-profile"
@@ -104,7 +94,7 @@ class RiskProfileSkill(Skill[RiskProfileInput, RiskProfileOutput]):
             risk_level = RiskLevel.LOW
             recommended_action = "allow"
 
-        return RiskProfileOutput(
+        return RiskProfile(
             session_id=input_data.session_id,
             risk_level=risk_level,
             recommended_action=recommended_action,

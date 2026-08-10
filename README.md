@@ -78,15 +78,21 @@ GoAISpace/
 ### 安装
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+uv venv
+uv pip install -r requirements.txt
+uv pip install -e .
 ```
 
 ### 运行 Demo：Slopsquatting / 幻觉包拦截
 
 ```bash
 python src/supplyguard/demo/slopsquatting_guard.py
+```
+
+或直接使用 uv run：
+
+```bash
+uv run python src/supplyguard/demo/slopsquatting_guard.py
 ```
 
 该 Demo 模拟一次 PR 事件：AI 生成的代码引入了名为 `lodos` 的包（`lodash` 的 typosquat / 幻觉）。
@@ -104,7 +110,7 @@ SupplyGuard 会按以下链路执行：
 ### 运行测试
 
 ```bash
-pytest tests/
+uv run pytest tests/
 ```
 
 ## 架构要点
