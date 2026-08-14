@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from supplyguard.models.messages import AnalysisRequest, RiskProfile
+from supplyguard.security.injection_detector import InjectionDetector
 from supplyguard.skills.cve_match import CveMatchInput, CveMatchSkill
 from supplyguard.skills.hallucination_check import (
     HallucinationCheckInput,
@@ -35,6 +36,7 @@ class AnalystAgent(Agent):
         self.hallucination_skill = HallucinationCheckSkill()
         self.cve_match_skill = CveMatchSkill()
         self.risk_profile_skill = RiskProfileSkill()
+        self.injection_detector = InjectionDetector()
 
     async def handle(self, message: object) -> RiskProfile | None:
         """Analyze an AnalysisRequest and return a RiskProfile."""
@@ -43,6 +45,19 @@ class AnalystAgent(Agent):
 
         signals: list[dict] = []
         for change in message.changes:
+            # Onion L2/L3: scan untrusted context for prompt injection before
+            # any other analysis consumes it.
+            injection_scan = self.injection_detector.detect(change.context_text)
+            if injection_scan.suspicious:
+                signals.append(
+                    {
+                        "skill": "injection-scan",
+                        "source": "injection-detector",
+                        "confidence": 0.85,
+                        "data": injection_scan.model_dump(),
+                    }
+                )
+
             # Signal 1: hallucination / slopsquatting detection.
             hallucination_result = await self.hallucination_skill.run(
                 HallucinationCheckInput(
@@ -60,10 +75,9 @@ class AnalystAgent(Agent):
                 }
             )
 
-            # Signal 2: CVE / vulnerability matching.
-            # v1 uses a stub database; production will call OSV/GHSA MCP tools.
+            # Signal 2: CVE / vulnerability matching (OSV with offline stub fallback).
             version = change.new_version or change.old_version or "unknown"
-            cve_result = self.cve_match_skill.run(
+            cve_result = await self.cve_match_skill.run(
                 CveMatchInput(
                     package_name=change.package_name,
                     version=version.lstrip("^~>=<") if version != "unknown" else version,
@@ -73,7 +87,7 @@ class AnalystAgent(Agent):
             signals.append(
                 {
                     "skill": "cve-match",
-                    "source": "osv-stub",
+                    "source": "osv",
                     "confidence": 0.95,
                     "data": cve_result.model_dump(),
                 }
@@ -89,3 +103,4 @@ class AnalystAgent(Agent):
 
     async def close(self) -> None:
         await self.hallucination_skill.close()
+        await self.cve_match_skill.close()

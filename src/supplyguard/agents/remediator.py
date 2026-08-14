@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import ClassVar
 
 from supplyguard.models.messages import RemediationOrder, RemediationResult
@@ -59,9 +61,16 @@ class RemediatorAgent(Agent):
             session_id=order.session_id,
             success=True,
             artifacts=artifacts,
-            logs_hash="sha256:demo",
+            logs_hash=self._artifacts_hash(artifacts),
             regression_detected=False,
         )
+
+    @staticmethod
+    def _artifacts_hash(artifacts: dict) -> str:
+        digest = hashlib.sha256(
+            json.dumps(artifacts, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        return f"sha256:{digest[:16]}"
 
     async def handle(self, message: object) -> RemediationResult | None:
         """Execute a remediation order using the common Agent interface."""

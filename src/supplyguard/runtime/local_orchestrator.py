@@ -19,6 +19,7 @@ from supplyguard.models.messages import (
     RemediationResult,
     RiskProfile,
 )
+from supplyguard.observability import log_event, span
 
 
 class LocalOrchestrator:
@@ -39,27 +40,34 @@ class LocalOrchestrator:
         -> Auditor (seal)
         """
         # 1. Sentinel perceives and tags input
-        request = await self.sentinel.handle(event)
+        log_event("task.received", session_id=event.get("session_id"), source=event.get("source"))
+        with span("sentinel.handle", agent_id="Sentinel"):
+            request = await self.sentinel.handle(event)
         if not isinstance(request, AnalysisRequest):
             return {"error": "Sentinel could not parse event"}
 
         # 2. Analyst produces risk profile
-        risk_profile = await self.analyst.handle(request)
+        with span("analyst.handle", agent_id="Analyst", session_id=request.session_id):
+            risk_profile = await self.analyst.handle(request)
         if not isinstance(risk_profile, RiskProfile):
             return {"error": "Analyst did not produce a RiskProfile"}
 
         # 3. Auditor arbitrates
-        order = self.auditor.handle_risk_profile(risk_profile)
+        with span("auditor.arbitrate", agent_id="Auditor", session_id=request.session_id):
+            order = self.auditor.handle_risk_profile(risk_profile)
         if not isinstance(order, RemediationOrder):
             return {"error": "Auditor did not produce a RemediationOrder"}
 
         # 4. Remediator acts (if needed)
-        result = await self.remediator.handle(order)
+        with span("remediator.handle", agent_id="Remediator", session_id=request.session_id):
+            result = await self.remediator.handle(order)
         if not isinstance(result, RemediationResult):
             return {"error": "Remediator did not produce a RemediationResult"}
 
         # 5. Auditor seals audit log
-        seal = self.auditor.handle_remediation_result(result)
+        with span("auditor.seal", agent_id="Auditor", session_id=request.session_id):
+            seal = self.auditor.handle_remediation_result(result)
+        log_event("task.sealed", session_id=request.session_id, verdict=order.verdict.value)
 
         return {
             "session_id": request.session_id,

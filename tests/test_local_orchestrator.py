@@ -10,12 +10,23 @@ from supplyguard.skills.hallucination_check import HallucinationCheckSkill
 from .test_hallucination_check import FakeNpmRegistryClient
 
 
+class FakeOsvClient:
+    """Offline OSV fixture that forces the cve-match stub fallback."""
+
+    async def query_vulns(self, package_name: str, version: str, ecosystem: str = "npm"):
+        raise RuntimeError("offline")
+
+    async def close(self) -> None:
+        return None
+
+
 def run_workflow(event: dict) -> dict:
     async def run() -> dict:
         orchestrator = LocalOrchestrator()
         orchestrator.analyst.hallucination_skill = HallucinationCheckSkill(
             FakeNpmRegistryClient({"lodash"})
         )
+        orchestrator.analyst.cve_match_skill.osv_client = FakeOsvClient()
         try:
             return await orchestrator.run_guard(event)
         finally:

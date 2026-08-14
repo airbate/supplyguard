@@ -40,6 +40,7 @@ class RiskProfileSkill(Skill[RiskProfileInput, RiskProfile]):
         license_violation = False
         maintainer_anomaly = False
         registry_unreachable = False
+        injection_detected = False
 
         for signal in signals:
             skill = signal.get("skill", "unknown")
@@ -56,8 +57,15 @@ class RiskProfileSkill(Skill[RiskProfileInput, RiskProfile]):
                 )
             )
 
-            if skill == "hallucination-check" and data.get("is_hallucination_risk"):
-                hallucination_risk = True
+            if skill == "hallucination-check":
+                if data.get("is_hallucination_risk"):
+                    hallucination_risk = True
+                # Registry-unreachable is a distinct fail-safe signal, not an
+                # alternative to hallucination detection. Report it on its own
+                # so an offline typosquat still surfaces the outage (not just
+                # the stronger hallucination verdict).
+                if data.get("evidence", {}).get("registry_error"):
+                    registry_unreachable = True
             elif skill == "cve-match":
                 severity = data.get("max_severity", "")
                 if severity == "critical":
@@ -68,12 +76,18 @@ class RiskProfileSkill(Skill[RiskProfileInput, RiskProfile]):
                 license_violation = True
             elif skill == "maintainer-profile" and data.get("maintainer_change_detected"):
                 maintainer_anomaly = True
-            elif skill == "hallucination-check" and data.get("evidence", {}).get("registry_error"):
-                registry_unreachable = True
+            elif skill == "injection-scan" and data.get("suspicious"):
+                injection_detected = True
 
         human_review_reasons: list[str] = []
 
-        if hallucination_risk:
+        if injection_detected:
+            # A prompt-injection attempt is a meta-attack on the system itself;
+            # it outranks every other signal.
+            risk_level = RiskLevel.CRITICAL
+            recommended_action = "block"
+            human_review_reasons.append("Prompt-injection attempt detected in untrusted content.")
+        elif hallucination_risk:
             risk_level = RiskLevel.CRITICAL
             recommended_action = "block"
             human_review_reasons.append("Hallucinated or typosquatted package detected.")
