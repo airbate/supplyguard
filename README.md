@@ -30,18 +30,23 @@ SupplyGuard 试图用多 Agent 系统解决这道题：把守门（proactive）�
 
 ## 项目状态
 
-**v0.2：设计与骨架代码阶段**。
+**v0.3：能力补齐阶段**（在 v0.2 骨架基础上落地）。
 
 - [x] 参赛方向与场景确认
 - [x] 解决方案架构（双入口一引擎 + 洋葱式安全防御）
 - [x] 多 Agent 角色分工（Sentinel / Analyst / Remediator / Auditor）
 - [x] 核心 Skill 清单（13 个 Skill，含输入输出与失败降级）
-- [x] AgentTeams / HiClaw 框架映射（基于公开信息，待 hello-world 验证）
-- [x] 技术选型（MCP / RAG / 可观测 / 数据层）
 - [x] 可运行骨架代码（Python 3.10+）
-- [ ] AgentTeams/HiClaw 真实框架接入
+- [x] 已实现 Skill：`hallucination-check`、`cve-match`（OSV 实时 + 离线降级）、`risk-profile`、`sbom-build`、`license-check`
+- [x] 审计日志 append-only + HMAC 签名哈希链（替换占位 `sha256:demo`）
+- [x] 可观测：结构化 JSON 日志 + span trace（标准库，无重依赖）
+- [x] 洋葱 L2/L3：prompt-injection 检测 + 零宽字符剥离
+- [x] HiClaw adapter 骨架（Manager=Sentinel，Workers=Analyst/Remediator/Auditor）
+- [ ] AgentTeams/HiClaw 真实框架接入（待 hello-world 验证）
 - [ ] 初赛提交材料（500 字作品简介 + 方案 PPT）
 - [ ] 复赛完整 Demo（第二段：零日 CVE 响应）
+
+> 依赖已收敛：移除未使用的 `sqlalchemy` / `pgvector`（v1 用内存审计日志 + 结构化日志；RAG / 共享状态为复赛 TODO）。
 
 ## 目录结构
 
@@ -61,11 +66,14 @@ GoAISpace/
 ├── src/supplyguard/                       # 核心实现
 │   ├── agents/                            # 4 个 Agent
 │   ├── skills/                            # Skill 实现
-│   ├── mcp/                               # MCP 等效工具层
+│   ├── mcp/                               # MCP 等效工具层 + 工具契约
 │   ├── models/                            # 消息与状态 Schema
-│   ├── runtime/                           # 本地编排器（可替换 HiClaw）
+│   ├── runtime/                           # 本地编排器 + HiClaw adapter 骨架
+│   ├── audit/                             # append-only 签名审计日志
+│   ├── security/                          # 洋葱 L2/L3（injection detector）
+│   ├── observability.py                   # 结构化日志 + span trace
 │   └── demo/                              # Demo 场景
-└── tests/                                 # 单元测试
+└── tests/                                 # 单元测试（43 例）
 ```
 
 ## 本地运行
